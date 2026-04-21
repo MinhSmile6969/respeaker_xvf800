@@ -192,25 +192,18 @@ class ScrollableFrame(ttk.Frame):
             canvas.unbind_all("<Button-4>"),
             canvas.unbind_all("<Button-5>"),
         ])
-
-
 def _scan_pa_sinks():
-    """Return list of (sink_name, display_label) from PulseAudio via pactl.
-    Falls back to empty list if pactl is unavailable."""
+    """Return list of (sink_name, display_label) from PulseAudio via pactl."""
     try:
         import shutil as _sh
         if not _sh.which("pactl"):
             return []
-
-        # default sink name
         r = subprocess.run(["pactl", "info"], capture_output=True, text=True, timeout=3)
         default_sink = ""
         for line in r.stdout.splitlines():
             if line.startswith("Default Sink:"):
                 default_sink = line.split(":", 1)[1].strip()
                 break
-
-        # sink names + descriptions
         r2 = subprocess.run(["pactl", "list", "sinks"],
                             capture_output=True, text=True, timeout=5)
         sinks = []
@@ -222,8 +215,7 @@ def _scan_pa_sinks():
             elif ls.startswith("Description:"):
                 desc = ls.split(":", 1)[1].strip()
                 if name:
-                    is_def = (name == default_sink)
-                    label  = desc + (" [Default]" if is_def else "")
+                    label = desc + (" [Default]" if name == default_sink else "")
                     sinks.append((name, label))
                     name = desc = ""
         return sinks
@@ -281,9 +273,8 @@ class App(tk.Tk):
             os.path.expanduser("~"), "respeaker_recordings"))
         self._audio_devices  = []   # list of (sd_index, name, max_ch)
         self._out_devices    = []   # list of (sink_name, label) for playback
-        self._play_proc      = None  # subprocess for paplay
+        self._play_proc      = None
         self._out_device_var = tk.StringVar()
-        self._play_stream    = None
 
         self._apply_styles()
         self._build_ui()
@@ -1187,11 +1178,7 @@ class App(tk.Tk):
     def on_close(self):
         self._stop_auto()
         self._rec_stop()
-        if self._play_stream:
-            try:
-                self._play_stream.stop()
-            except Exception:
-                pass
+        self._stop_playback()
         if self.device:
             try:
                 self.device.close()
@@ -1773,6 +1760,12 @@ class App(tk.Tk):
                 sink_name = sname
                 break
 
+        if not sink_name:
+            messagebox.showwarning(
+                "No Output Device",
+                "No output device selected.\n\nClick 'Scan' first, then choose an output device.")
+            return
+
         fname = os.path.basename(path)
         self.after(0, lambda: (
             self._play_lbl.config(text=fname, fg=COK),
@@ -1785,19 +1778,13 @@ class App(tk.Tk):
                     raise RuntimeError(
                         "paplay not found.\n"
                         "Install with:  sudo apt install pulseaudio-utils")
-
-                cmd = ["paplay"]
-                if sink_name:
-                    cmd.append(f"--device={sink_name}")
-                cmd.append(path)
-
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE)
+                env = os.environ.copy()
+                env["PULSE_SINK"] = sink_name
+                cmd = ["paplay", "--device=" + sink_name, path]
+                proc = subprocess.Popen(cmd, env=env,
+                                        stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.PIPE)
                 self._play_proc = proc
-
-                # wait, checking stop flag
                 stop_flag = self._play_stop_flag
                 while proc.poll() is None:
                     if stop_flag[0]:
@@ -1805,11 +1792,9 @@ class App(tk.Tk):
                         proc.wait()
                         break
                     time.sleep(0.1)
-
                 self._play_proc = None
                 rc     = proc.returncode
                 stderr = (proc.stderr.read() or b"").decode(errors="replace").strip()
-
                 if stop_flag[0]:
                     self.after(0, lambda: self._play_lbl.config(text="", fg=CMT))
                 elif rc == 0:
@@ -1840,12 +1825,6 @@ class App(tk.Tk):
             except Exception:
                 pass
             self._play_proc = None
-        if self._play_stream:
-            try:
-                self._play_stream.stop()
-            except Exception:
-                pass
-            self._play_stream = None
         if hasattr(self, "_play_lbl"):
             self._play_lbl.config(text="", fg=CMT)
 

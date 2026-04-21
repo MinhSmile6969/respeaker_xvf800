@@ -112,6 +112,74 @@ Plug in the reSpeaker device via USB **before** launching, then click **Connect*
 
 ---
 
+## Running on NVIDIA Jetson AGX
+
+Jetson AGX (Xavier / Orin) chạy Ubuntu ARM64 — mọi bước Setup ở trên đều áp dụng được, chỉ cần lưu ý thêm các điểm dưới đây.
+
+### Install dependencies
+
+```bash
+sudo apt install python3-tk libusb-1.0-0 dfu-util
+pip3 install pyusb
+```
+
+### USB permission (udev rule)
+
+```bash
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666"' | sudo tee /etc/udev/rules.d/99-respeaker.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### Display — 3 cách chạy GUI
+
+#### Option A — Jetson có màn hình HDMI/DP gắn trực tiếp
+
+Không cần cấu hình thêm, chạy thẳng:
+
+```bash
+python3 respeaker_ui.py
+```
+
+#### Option B — SSH từ máy khác (X11 Forwarding)
+
+Trên máy tính cá nhân SSH vào Jetson với flag `-X`:
+
+```bash
+ssh -X user@<jetson-ip>
+cd reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control
+python3 respeaker_ui.py
+```
+
+> Máy tính cá nhân cần có X server:
+> - **Linux**: có sẵn
+> - **Windows**: cài [VcXsrv](https://sourceforge.net/projects/vcxsrv/) hoặc [Xming](https://sourceforge.net/projects/xming/)
+> - **macOS**: cài [XQuartz](https://www.xquartz.org/)
+
+#### Option C — Jetson headless, dùng VNC
+
+Trên Jetson:
+
+```bash
+sudo apt install tigervnc-standalone-server
+vncserver :1 -geometry 1280x800 -depth 24
+```
+
+Rồi kết nối từ máy tính bằng VNC client vào `<jetson-ip>:5901`, sau đó mở terminal trong VNC và chạy:
+
+```bash
+DISPLAY=:1 python3 respeaker_ui.py
+```
+
+### Lưu ý đặc thù Jetson
+
+| Vấn đề | Giải pháp |
+|--------|-----------|
+| `DISPLAY not set` khi chạy qua SSH không có `-X` | Thêm `DISPLAY=:0` trước lệnh hoặc dùng Option B/C |
+| Audio record không thấy sink | Jetson dùng PipeWire/PulseAudio — kiểm tra `pactl list sinks short` |
+| `dfu-util` không thấy thiết bị | Chạy với `sudo` hoặc thêm udev rule ở trên |
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |

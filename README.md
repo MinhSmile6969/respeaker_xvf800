@@ -1,93 +1,198 @@
-# hw_mic_respeaker_xf3800
+# reSpeaker XVF3800 — Control Panel GUI
 
+A Python/Tkinter GUI for monitoring, controlling, and flashing firmware on the **reSpeaker XVF3800 USB 4-Mic Array**.
 
+This repo ships **one file only**: `respeaker_ui.py`.  
+It must be placed inside the official SDK folder (see [Setup](#setup) below).
 
-## Getting started
+---
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Features
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+| Tab | Description |
+|-----|-------------|
+| **Firmware** | Read version, build info, boot status |
+| **Live** | Real-time DOA compass, AEC energy, speech activity — auto-refreshes every 1.5 s |
+| **Audio** | Mic/reference gain, output channels, I²S config |
+| **AEC** | Echo cancellation parameters |
+| **PostProc** | AGC, noise suppression, limiter, de-reverberation |
+| **LED** | Effect, brightness, colour, DOA ring |
+| **GPIO** | Read/write GPIO port pins |
+| **System** | Save / clear config, reboot |
+| **Flash** | Flash `.bin` firmware files from `xmos_firmwares/` via USB DFU |
+| **Record** | Capture audio from the device via PulseAudio |
 
-## Add your files
+---
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Requirements
+
+| Dependency | Version |
+|------------|---------|
+| Python | 3.6 + |
+| tkinter | bundled with Python (install `python3-tk` on Ubuntu if missing) |
+| pyusb | `pip install pyusb` |
+| libusb | system package — see below |
+
+### Install system packages (Ubuntu/Debian)
+
+```bash
+sudo apt install python3-tk libusb-1.0-0
+pip install pyusb
+```
+
+### Install system packages (Fedora/RHEL)
+
+```bash
+sudo dnf install python3-tkinter libusb1
+pip install pyusb
+```
+
+---
+
+## Setup
+
+### Step 1 — Download the official SDK
+
+Clone or download the SDK from the Seeed Studio GitHub repository:
+
+```bash
+git clone https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY.git
+```
+
+The resulting folder structure should look like this:
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/vd-software/solution/product-deployment2/1-hardware/hw_mic_respeaker_xf3800.git
-git branch -M main
-git push -uf origin main
+reSpeaker_XVF3800_USB_4MIC_ARRAY/
+├── python_control/
+│   ├── xvf_host.py          ← SDK file (required by the UI)
+│   ├── respeaker_get_doa.py
+│   └── readme.md
+├── xmos_firmwares/
+│   ├── usb/
+│   ├── i2s/
+│   └── recover/
+├── host_control/
+└── README.md
 ```
 
-## Integrate with your tools
+### Step 2 — Place `respeaker_ui.py` in the correct folder
 
-* [Set up project integrations](https://gitlab.com/vd-software/solution/product-deployment2/1-hardware/hw_mic_respeaker_xf3800/-/settings/integrations)
+Copy `respeaker_ui.py` into **`reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/`**:
 
-## Collaborate with your team
+```bash
+cp respeaker_ui.py reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+After this step the folder should be:
 
-## Test and Deploy
+```
+reSpeaker_XVF3800_USB_4MIC_ARRAY/
+└── python_control/
+    ├── xvf_host.py          ← already in SDK
+    ├── respeaker_get_doa.py ← already in SDK
+    ├── respeaker_ui.py      ← copied from this repo  ✓
+    └── readme.md
+```
 
-Use the built-in continuous integration in GitLab.
+> **Why this location?**  
+> `respeaker_ui.py` imports `xvf_host.py` at runtime using a relative path.  
+> Both files must be in the same `python_control/` directory.  
+> The firmware flash feature also looks for `../xmos_firmwares/` relative to this folder.
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+---
 
-***
+## Run
 
-# Editing this README
+```bash
+cd reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control
+python3 respeaker_ui.py
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Plug in the reSpeaker device via USB **before** launching, then click **Connect** in the UI.
 
-## Suggestions for a good README
+---
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## Troubleshooting
 
-## Name
-Choose a self-explaining name for your project.
+| Symptom | Fix |
+|---------|-----|
+| `ModuleNotFoundError: xvf_host` | `respeaker_ui.py` is not inside `python_control/` — re-check Step 2 |
+| `No backend available` (pyusb) | `libusb` is not installed — run the apt/dnf command above |
+| `Permission denied` on USB device | Add udev rule: `echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666"' \| sudo tee /etc/udev/rules.d/99-respeaker.rules && sudo udevadm control --reload` |
+| `_tkinter` not found | Install `python3-tk`: `sudo apt install python3-tk` |
+| Firmware folder empty in Flash tab | Ensure `xmos_firmwares/` exists one level above `python_control/` and contains `.bin` files |
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+---
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+## Device Recovery — Bricked / USB Not Detected After Flash
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+If the device becomes unresponsive (frozen LED, not detected by the OS) after a failed firmware flash, follow these steps to recover it via USB DFU mode.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+### Prerequisites
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```bash
+sudo apt install dfu-util
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### Step 1 — Enter DFU (bootloader) mode
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+1. **Unplug** the device from USB.
+2. **Hold the Mute button** and **plug the USB cable back in** while keeping the button held.
+3. Continue holding the Mute button for **~3–5 seconds** until the LED flashes red.
+4. Release the button — the device is now in DFU mode.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+### Step 2 — Verify the device is detected
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+```bash
+sudo dfu-util -l
+```
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+You should see a DFU device listed (Vendor ID `2886`). If nothing appears, repeat Step 1.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+### Step 3 — Flash the recovery firmware (erase flash)
 
-## License
-For open source projects, say how it is licensed.
+Use the `4mb_all_ff.bin` recovery image to wipe the flash.  
+This file is located at:
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```
+reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/recover/4mb_all_ff.bin
+```
+
+```bash
+sudo dfu-util -R -e -a 1 -D reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/recover/4mb_all_ff.bin
+```
+
+> This erases all firmware from the device. The LED will go dark or stay red — this is expected.
+
+### Step 4 — Flash the desired firmware
+
+Choose the appropriate firmware from the table below:
+
+| Mode | File path |
+|------|-----------|
+| USB (recommended) v2.0.7 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.7.bin` |
+| USB 6-channel v2.0.8 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_6chl_v2.0.8.bin` |
+| USB v2.0.6 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.6.bin` |
+| USB v2.0.5 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.5.bin` |
+| I2S Master v1.0.7 48kHz | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/i2s/respeaker_xvf3800_i2s_master_dfu_firmware_v1.0.7_48k_test5.bin` |
+| I2S Master v1.0.5 48kHz | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/i2s/respeaker_xvf3800_i2s_master_dfu_firmware_v1.0.5_48k.bin` |
+| I2S v1.0.4 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/i2s/respeaker_xvf3800_i2s_dfu_firmware_v1.0.4.bin` |
+
+Example (USB v2.0.7):
+
+```bash
+sudo dfu-util -R -e -a 1 -D reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.7.bin
+```
+
+### Step 5 — Verify
+
+```bash
+sudo dfu-util -l
+```
+
+Confirm the device still appears in DFU mode.
+
+### Step 6 — Reconnect normally
+
+Unplug and re-plug the USB cable **without** holding the Mute button.  
+The device should boot with the new firmware and be detected as a normal USB audio device.

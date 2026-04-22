@@ -119,6 +119,65 @@ If this works without `sudo`, permissions are correctly set.
 
 ---
 
+## Flashing Firmware Through the UI (Without sudo)
+
+The **Flash Firmware** tab in the Control Panel calls `dfu-util` internally. For it to work without `sudo`, two conditions must be met:
+
+### Condition 1 — udev rules are set (see USB Permissions Setup above)
+
+The udev rule covers **both** normal mode and DFU mode since both use Vendor ID `2886`. Once the rules are in place and the user is in the `plugdev` group, no `sudo` is needed.
+
+### Condition 2 — Device must be in DFU mode before clicking Flash
+
+The UI does **not** automatically enter DFU mode. You must do it manually first:
+
+1. Unplug the device.
+2. Hold the **Mute button**, plug the USB cable back in, keep holding for **~3–5 seconds** until the LED flashes red.
+3. Release the button — device is now in DFU mode.
+4. In the UI, go to **Flash Firmware** tab → click **Scan DFU Devices** to confirm it's detected.
+5. Select the firmware file → click **Flash Selected Firmware**.
+
+### Workflow summary
+
+```
+Hold Mute + plug USB → LED flashes red
+         ↓
+UI: Flash tab → Scan DFU Devices → confirm "Found DFU"
+         ↓
+Select firmware → Flash Selected Firmware → wait for 100%
+         ↓
+Device reboots automatically → unplug & replug → Connect
+```
+
+### If "Scan DFU Devices" says "Cannot open DFU device"
+
+This means the udev rule is not active. Fix:
+
+```bash
+# Re-apply udev rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# Confirm user is in plugdev group
+groups | grep plugdev
+
+# If not in plugdev, add and re-login
+sudo usermod -aG plugdev $USER
+# then logout and login again
+```
+
+### If flashing fails with exit code ≠ 0
+
+Check the Flash Output Log in the UI. Common causes:
+
+| Log message | Cause | Fix |
+|-------------|-------|-----|
+| `Cannot open DFU device` | USB permission denied | Re-apply udev rules above |
+| `No DFU capable USB device available` | Device not in DFU mode | Repeat Hold Mute + plug in |
+| `dfu-util not found` | Tool not installed | `sudo apt install dfu-util` |
+| `error resetting after download` | Normal for some firmware | Ignore — flash usually succeeded |
+
+---
+
 ## Setup
 
 ### Step 1 — Download the official SDK

@@ -394,8 +394,8 @@ class App(tk.Tk):
                  bg="#dde5ef", fg=CMT, font=("Helvetica", 14)).pack(pady=(6, 2))
         tk.Label(mid,
                  text="• Connect the device via USB-C (next to 3.5 mm jack)\n"
-                      "• On Linux run:  sudo python respeaker_ui.py\n"
-                      "• Install deps:  pip install pyusb libusb-package",
+                      "• On Linux: set udev rules so no sudo is needed (see README)\n"
+                      "• Install deps:  pip install pyusb  +  sudo apt install libusb-1.0-0",
                  bg="#dde5ef", fg=CMT, font=("Helvetica", 13),
                  justify="left").pack(pady=(4, 24))
         ttk.Button(mid, text="  Connect  ", style="Accent.TButton",
@@ -815,7 +815,10 @@ class App(tk.Tk):
                     fg=COK)
             elif "Cannot open DFU" in out:
                 self.dfu_status_lbl.config(
-                    text="Device found but cannot open — run with sudo.", fg=CWRN)
+                    text="Device found but cannot open — udev rule missing.\n"
+                         "Run: sudo udevadm control --reload-rules && sudo udevadm trigger\n"
+                         "and confirm your user is in the 'plugdev' group (see README).",
+                    fg=CWRN)
             else:
                 self.dfu_status_lbl.config(
                     text="No DFU devices detected. Check USB connection.", fg=CWRN)
@@ -942,7 +945,10 @@ class App(tk.Tk):
             messagebox.showerror("Flash Failed",
                 f"dfu-util exited with code {rc}.\n"
                 "Check the output log for details.\n\n"
-                "Common fix: run the app with sudo.")
+                "Common fixes:\n"
+                "• udev rule not set — see README 'USB Permissions Setup'\n"
+                "• Device not in DFU mode — hold Mute + replug USB\n"
+                "• dfu-util not installed — sudo apt install dfu-util")
 
     def _flash_error(self, err):
         self.flash_progress.stop()

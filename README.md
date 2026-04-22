@@ -49,6 +49,76 @@ pip install pyusb
 
 ---
 
+## USB Permissions Setup
+
+By default, USB devices on Linux require `root` to access directly. Without this step, the Control Panel will fail to connect and `dfu-util` will not detect the device.
+
+### Step 1 — Install required packages
+
+```bash
+sudo apt install libusb-1.0-0 dfu-util pulseaudio-utils
+pip install pyusb sounddevice soundfile numpy
+```
+
+### Step 2 — Create udev rules
+
+This single rule covers both **normal mode** (control panel) and **DFU mode** (firmware flashing):
+
+```bash
+sudo tee /etc/udev/rules.d/99-respeaker.rules > /dev/null << 'EOF'
+# ReSpeaker XVF3800 — normal operation mode (VID 2886, PID 001A)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2886", ATTR{idProduct}=="001a", MODE="0666", GROUP="plugdev"
+# ReSpeaker XVF3800 — DFU / bootloader mode (same VID, PID may vary)
+SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666", GROUP="plugdev"
+EOF
+```
+
+### Step 3 — Add your user to the `plugdev` group
+
+```bash
+sudo usermod -aG plugdev $USER
+```
+
+> **Important:** Log out and log back in (or reboot) for group membership to take effect.
+
+### Step 4 — Reload udev rules
+
+```bash
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+### Step 5 — Verify (unplug then replug the device)
+
+```bash
+# Check device is visible
+lsusb | grep 2886
+
+# Check permissions (should show rw for all users, e.g. crw-rw-rw-)
+ls -la /dev/bus/usb/$(lsusb | grep 2886 | awk '{print $2"/"$4}' | tr -d ':')
+```
+
+Expected output of `lsusb`:
+```
+Bus 001 Device 005: ID 2886:001a Seeed Technology Co., Ltd ReSpeaker XVF3800 4-Mic Array
+```
+
+### Step 6 — Verify DFU mode access (optional)
+
+Enter DFU mode (hold Mute + plug in USB), then:
+
+```bash
+dfu-util -l   # should list device WITHOUT sudo
+```
+
+If this works without `sudo`, permissions are correctly set.
+
+---
+
+> **Still getting `Permission denied`?**  
+> Run `groups` and confirm `plugdev` appears in the output. If not, the logout/login hasn't taken effect — try rebooting.
+
+---
+
 ## Setup
 
 ### Step 1 — Download the official SDK

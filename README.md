@@ -1,68 +1,63 @@
-# reSpeaker XVF3800 — Control Panel GUI
+# reSpeaker XVF3800 — Control Panel
 
-A Python/Tkinter GUI for monitoring, controlling, and flashing firmware on the **reSpeaker XVF3800 USB 4-Mic Array**.
+Tools for monitoring, controlling, and flashing firmware on the **reSpeaker XVF3800 USB 4-Mic Array**.
 
-This repo ships **one file only**: `respeaker_ui.py`.  
-It must be placed inside the official SDK folder (see [Setup](#setup) below).
+This repo ships **two files**:
+
+| File | Description |
+|------|-------------|
+| `respeaker_ui.py` | Desktop GUI (Tkinter) — run locally on the machine with the mic |
+| `respeaker_web.py` | Web UI (Flask) — SSH into the machine, open in any browser remotely |
+
+Both files must be placed inside the SDK's `python_control/` folder (see [Setup](#setup)).
 
 ---
 
 ## Features
 
-| Tab | Description |
-|-----|-------------|
+| Tab / Section | Description |
+|---------------|-------------|
 | **Firmware** | Read version, build info, boot status |
 | **Live** | Real-time DOA compass, AEC energy, speech activity — auto-refreshes every 1.5 s |
 | **Audio** | Mic/reference gain, output channels, I²S config |
-| **AEC** | Echo cancellation parameters |
+| **AEC** | Echo cancellation parameters (including System Delay) |
 | **PostProc** | AGC, noise suppression, limiter, de-reverberation |
 | **LED** | Effect, brightness, colour, DOA ring |
 | **GPIO** | Read/write GPIO port pins |
 | **System** | Save / clear config, reboot |
 | **Flash** | Flash `.bin` firmware files from `xmos_firmwares/` via USB DFU |
-| **Record** | Capture audio from the device via PulseAudio |
+| **Record** | Capture audio from the device (`respeaker_ui.py` only) |
 
 ---
 
 ## Requirements
 
-| Dependency | Version |
-|------------|---------|
-| Python | 3.6 + |
-| tkinter | bundled with Python (install `python3-tk` on Ubuntu if missing) |
-| pyusb | `pip install pyusb` |
-| libusb | system package — see below |
-
-### Install system packages (Ubuntu/Debian)
+### Desktop GUI — `respeaker_ui.py`
 
 ```bash
-sudo apt install python3-tk libusb-1.0-0
-pip install pyusb
+sudo apt install python3-tk libusb-1.0-0 dfu-util
+pip install pyusb sounddevice soundfile numpy libusb-package
 ```
 
-### Install system packages (Fedora/RHEL)
+### Web UI — `respeaker_web.py`
 
 ```bash
-sudo dnf install python3-tkinter libusb1
-pip install pyusb
+sudo apt install libusb-1.0-0 dfu-util
+pip install flask pyusb libusb-package
 ```
+
+> No display or X11 required for the web UI — works over plain SSH.
 
 ---
 
 ## USB Permissions Setup
 
-By default, USB devices on Linux require `root` to access directly. Without this step, the Control Panel will fail to connect and `dfu-util` will not detect the device.
+> **Do this once on every machine where the mic is connected.**  
+> Without it, both tools will fail to connect and `dfu-util` will not detect the device.
 
-### Step 1 — Install required packages
+### Step 1 — Create udev rules
 
-```bash
-sudo apt install libusb-1.0-0 dfu-util pulseaudio-utils
-pip install pyusb sounddevice soundfile numpy
-```
-
-### Step 2 — Create udev rules
-
-This single rule covers both **normal mode** (control panel) and **DFU mode** (firmware flashing):
+Covers both **normal mode** (control panel) and **DFU mode** (firmware flashing):
 
 ```bash
 sudo tee /etc/udev/rules.d/99-respeaker.rules > /dev/null << 'EOF'
@@ -73,108 +68,32 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666", GROUP="plugdev"
 EOF
 ```
 
-### Step 3 — Add your user to the `plugdev` group
+### Step 2 — Add user to `plugdev` group
 
 ```bash
 sudo usermod -aG plugdev $USER
 ```
 
-> **Important:** Log out and log back in (or reboot) for group membership to take effect.
+> Log out and log back in (or reboot) for group membership to take effect.
 
-### Step 4 — Reload udev rules
+### Step 3 — Reload udev
 
 ```bash
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-### Step 5 — Verify (unplug then replug the device)
+### Step 4 — Verify
 
 ```bash
-# Check device is visible
 lsusb | grep 2886
-
-# Check permissions (should show rw for all users, e.g. crw-rw-rw-)
-ls -la /dev/bus/usb/$(lsusb | grep 2886 | awk '{print $2"/"$4}' | tr -d ':')
 ```
 
-Expected output of `lsusb`:
+Expected:
 ```
 Bus 001 Device 005: ID 2886:001a Seeed Technology Co., Ltd ReSpeaker XVF3800 4-Mic Array
 ```
 
-### Step 6 — Verify DFU mode access (optional)
-
-Enter DFU mode (hold Mute + plug in USB), then:
-
-```bash
-dfu-util -l   # should list device WITHOUT sudo
-```
-
-If this works without `sudo`, permissions are correctly set.
-
----
-
-> **Still getting `Permission denied`?**  
-> Run `groups` and confirm `plugdev` appears in the output. If not, the logout/login hasn't taken effect — try rebooting.
-
----
-
-## Flashing Firmware Through the UI (Without sudo)
-
-The **Flash Firmware** tab in the Control Panel calls `dfu-util` internally. For it to work without `sudo`, two conditions must be met:
-
-### Condition 1 — udev rules are set (see USB Permissions Setup above)
-
-The udev rule covers **both** normal mode and DFU mode since both use Vendor ID `2886`. Once the rules are in place and the user is in the `plugdev` group, no `sudo` is needed.
-
-### Condition 2 — Device must be in DFU mode before clicking Flash
-
-The UI does **not** automatically enter DFU mode. You must do it manually first:
-
-1. Unplug the device.
-2. Hold the **Mute button**, plug the USB cable back in, keep holding for **~3–5 seconds** until the LED flashes red.
-3. Release the button — device is now in DFU mode.
-4. In the UI, go to **Flash Firmware** tab → click **Scan DFU Devices** to confirm it's detected.
-5. Select the firmware file → click **Flash Selected Firmware**.
-
-### Workflow summary
-
-```
-Hold Mute + plug USB → LED flashes red
-         ↓
-UI: Flash tab → Scan DFU Devices → confirm "Found DFU"
-         ↓
-Select firmware → Flash Selected Firmware → wait for 100%
-         ↓
-Device reboots automatically → unplug & replug → Connect
-```
-
-### If "Scan DFU Devices" says "Cannot open DFU device"
-
-This means the udev rule is not active. Fix:
-
-```bash
-# Re-apply udev rules
-sudo udevadm control --reload-rules && sudo udevadm trigger
-
-# Confirm user is in plugdev group
-groups | grep plugdev
-
-# If not in plugdev, add and re-login
-sudo usermod -aG plugdev $USER
-# then logout and login again
-```
-
-### If flashing fails with exit code ≠ 0
-
-Check the Flash Output Log in the UI. Common causes:
-
-| Log message | Cause | Fix |
-|-------------|-------|-----|
-| `Cannot open DFU device` | USB permission denied | Re-apply udev rules above |
-| `No DFU capable USB device available` | Device not in DFU mode | Repeat Hold Mute + plug in |
-| `dfu-util not found` | Tool not installed | `sudo apt install dfu-util` |
-| `error resetting after download` | Normal for some firmware | Ignore — flash usually succeeded |
+> **Still getting `Permission denied`?** Run `groups` — confirm `plugdev` is listed. If not, reboot.
 
 ---
 
@@ -182,18 +101,16 @@ Check the Flash Output Log in the UI. Common causes:
 
 ### Step 1 — Download the official SDK
 
-Clone or download the SDK from the Seeed Studio GitHub repository:
-
 ```bash
 git clone https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY.git
 ```
 
-The resulting folder structure should look like this:
+Structure after clone:
 
 ```
 reSpeaker_XVF3800_USB_4MIC_ARRAY/
 ├── python_control/
-│   ├── xvf_host.py          ← SDK file (required by the UI)
+│   ├── xvf_host.py          ← required by both UI files
 │   ├── respeaker_get_doa.py
 │   └── readme.md
 ├── xmos_firmwares/
@@ -204,74 +121,85 @@ reSpeaker_XVF3800_USB_4MIC_ARRAY/
 └── README.md
 ```
 
-### Step 2 — Place `respeaker_ui.py` in the correct folder
-
-Copy `respeaker_ui.py` into **`reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/`**:
+### Step 2 — Copy UI files into the SDK
 
 ```bash
-cp respeaker_ui.py reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/
+cp respeaker_ui.py  reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/
+cp respeaker_web.py reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/
 ```
 
-After this step the folder should be:
+After this step:
 
 ```
 reSpeaker_XVF3800_USB_4MIC_ARRAY/
 └── python_control/
-    ├── xvf_host.py          ← already in SDK
-    ├── respeaker_get_doa.py ← already in SDK
+    ├── xvf_host.py          ← SDK (required)
+    ├── respeaker_get_doa.py ← SDK
     ├── respeaker_ui.py      ← copied from this repo  ✓
+    ├── respeaker_web.py     ← copied from this repo  ✓
     └── readme.md
 ```
 
-> **Why this location?**  
-> `respeaker_ui.py` imports `xvf_host.py` at runtime using a relative path.  
-> Both files must be in the same `python_control/` directory.  
-> The firmware flash feature also looks for `../xmos_firmwares/` relative to this folder.
+> Both files import `xvf_host.py` at runtime. They also look for `../xmos_firmwares/` for firmware flashing.
 
 ---
 
-## Run
+## Run — Desktop GUI
+
+Requires a display (monitor, X11 forwarding, or VNC).
 
 ```bash
 cd reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control
 python3 respeaker_ui.py
 ```
 
-Plug in the reSpeaker device via USB **before** launching, then click **Connect** in the UI.
+Plug in the device via USB before launching, then click **Connect**.
+
+---
+
+## Run — Web UI (via SSH, no display needed)
+
+```bash
+# On the machine where the mic is connected:
+cd reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control
+python3 respeaker_web.py              # default port 5000
+python3 respeaker_web.py --port 8080  # custom port
+```
+
+Then open a browser on **any machine** on the same network:
+
+```
+http://<host-ip>:5000
+```
+
+The web UI includes all parameter tabs, real-time DOA compass, firmware flash with progress log, and Save Config — everything except audio recording.
 
 ---
 
 ## Running on NVIDIA Jetson AGX
 
-Jetson AGX (Xavier / Orin) chạy Ubuntu ARM64 — mọi bước Setup ở trên đều áp dụng được, chỉ cần lưu ý thêm các điểm dưới đây.
+Jetson AGX (Xavier / Orin) runs Ubuntu ARM64 — all steps above apply. Extra notes:
 
 ### Install dependencies
 
 ```bash
 sudo apt install python3-tk libusb-1.0-0 dfu-util
-pip3 install pyusb
+pip3 install pyusb libusb-package flask sounddevice soundfile numpy
 ```
 
-### USB permission (udev rule)
+### Display options for the Desktop GUI
 
-```bash
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666"' | sudo tee /etc/udev/rules.d/99-respeaker.rules
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
+#### Option A — Direct HDMI/DP monitor
 
-### Display — 3 cách chạy GUI
-
-#### Option A — Jetson có màn hình HDMI/DP gắn trực tiếp
-
-Không cần cấu hình thêm, chạy thẳng:
+No extra config needed:
 
 ```bash
 python3 respeaker_ui.py
 ```
 
-#### Option B — SSH từ máy khác (X11 Forwarding)
+#### Option B — SSH with X11 forwarding
 
-Trên máy tính cá nhân SSH vào Jetson với flag `-X`:
+From your laptop:
 
 ```bash
 ssh -X user@<jetson-ip>
@@ -279,33 +207,107 @@ cd reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control
 python3 respeaker_ui.py
 ```
 
-> Máy tính cá nhân cần có X server:
-> - **Linux**: có sẵn
-> - **Windows**: cài [VcXsrv](https://sourceforge.net/projects/vcxsrv/) hoặc [Xming](https://sourceforge.net/projects/xming/)
-> - **macOS**: cài [XQuartz](https://www.xquartz.org/)
+> Requires an X server on your laptop:  
+> **Linux** — built-in | **Windows** — [VcXsrv](https://sourceforge.net/projects/vcxsrv/) | **macOS** — [XQuartz](https://www.xquartz.org/)
 
-#### Option C — Jetson headless, dùng VNC
+#### Option C — Headless (recommended: use Web UI instead)
 
-Trên Jetson:
+The web UI is the simplest solution for headless Jetson — no VNC needed:
 
 ```bash
-sudo apt install tigervnc-standalone-server
-vncserver :1 -geometry 1280x800 -depth 24
+python3 respeaker_web.py --port 5000
+# open http://<jetson-ip>:5000 from your laptop browser
 ```
 
-Rồi kết nối từ máy tính bằng VNC client vào `<jetson-ip>:5901`, sau đó mở terminal trong VNC và chạy:
+---
+
+## Flashing Firmware Through the UI
+
+Both UIs can flash firmware. The device must be in **DFU mode** first.
+
+### Enter DFU mode
+
+1. Unplug the device.
+2. Hold the **Mute button**, plug USB back in, keep holding **~3–5 s** until LED flashes red.
+3. Release — device is now in DFU mode.
+
+### Flash workflow
+
+```
+Hold Mute + plug USB → LED flashes red
+         ↓
+UI: Flash tab → select firmware → Flash Selected Firmware → wait 100%
+         ↓
+Device reboots → unplug & replug → Connect
+```
+
+### Firmware files
+
+| Mode | File path |
+|------|-----------|
+| **USB v2.0.7** (recommended) | `xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.7.bin` |
+| USB 6-ch v2.0.8 | `xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_6chl_v2.0.8.bin` |
+| USB v2.0.6 | `xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.6.bin` |
+| USB v2.0.5 | `xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.5.bin` |
+| I2S Master v1.0.7 48kHz | `xmos_firmwares/i2s/respeaker_xvf3800_i2s_master_dfu_firmware_v1.0.7_48k_test5.bin` |
+| I2S Master v1.0.5 48kHz | `xmos_firmwares/i2s/respeaker_xvf3800_i2s_master_dfu_firmware_v1.0.5_48k.bin` |
+| I2S v1.0.4 | `xmos_firmwares/i2s/respeaker_xvf3800_i2s_dfu_firmware_v1.0.4.bin` |
+| **RECOVER (erase)** | `xmos_firmwares/recover/4mb_all_ff.bin` |
+
+### Flash from command line (without UI)
 
 ```bash
-DISPLAY=:1 python3 respeaker_ui.py
+sudo dfu-util -R -e -a 1 -D reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.7.bin
 ```
 
-### Lưu ý đặc thù Jetson
+### Flash errors
 
-| Vấn đề | Giải pháp |
-|--------|-----------|
-| `DISPLAY not set` khi chạy qua SSH không có `-X` | Thêm `DISPLAY=:0` trước lệnh hoặc dùng Option B/C |
-| Audio record không thấy sink | Jetson dùng PipeWire/PulseAudio — kiểm tra `pactl list sinks short` |
-| `dfu-util` không thấy thiết bị | Chạy với `sudo` hoặc thêm udev rule ở trên |
+| Message | Cause | Fix |
+|---------|-------|-----|
+| `Cannot open DFU device` | USB permission denied | Re-apply udev rules |
+| `No DFU capable USB device available` | Not in DFU mode | Repeat Hold Mute + plug in |
+| `dfu-util not found` | Tool missing | `sudo apt install dfu-util` |
+| `error resetting after download` | Normal on some firmware | Ignore — flash succeeded |
+
+---
+
+## Device Recovery — Bricked / Not Detected After Flash
+
+If the device is frozen (stuck LED, no USB detection) after a failed flash:
+
+### Step 1 — Enter DFU mode
+
+Hold Mute + plug in USB → hold ~3–5 s until LED flashes red.
+
+### Step 2 — Verify DFU device visible
+
+```bash
+sudo dfu-util -l
+```
+
+Should show a device with Vendor ID `2886`. If not, repeat Step 1.
+
+### Step 3 — Erase flash (recovery image)
+
+File location: `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/recover/4mb_all_ff.bin`
+
+```bash
+sudo dfu-util -R -e -a 1 -D reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/recover/4mb_all_ff.bin
+```
+
+> LED will go dark — this is expected.
+
+### Step 4 — Flash desired firmware
+
+See firmware table above. Example:
+
+```bash
+sudo dfu-util -R -e -a 1 -D reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.7.bin
+```
+
+### Step 5 — Reconnect normally
+
+Unplug and replug **without** holding Mute. Device should boot normally.
 
 ---
 
@@ -313,83 +315,11 @@ DISPLAY=:1 python3 respeaker_ui.py
 
 | Symptom | Fix |
 |---------|-----|
-| `ModuleNotFoundError: xvf_host` | `respeaker_ui.py` is not inside `python_control/` — re-check Step 2 |
-| `No backend available` (pyusb) | `libusb` is not installed — run the apt/dnf command above |
-| `Permission denied` on USB device | Add udev rule: `echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2886", MODE="0666"' \| sudo tee /etc/udev/rules.d/99-respeaker.rules && sudo udevadm control --reload` |
-| `_tkinter` not found | Install `python3-tk`: `sudo apt install python3-tk` |
-| Firmware folder empty in Flash tab | Ensure `xmos_firmwares/` exists one level above `python_control/` and contains `.bin` files |
-
----
-
-## Device Recovery — Bricked / USB Not Detected After Flash
-
-If the device becomes unresponsive (frozen LED, not detected by the OS) after a failed firmware flash, follow these steps to recover it via USB DFU mode.
-
-### Prerequisites
-
-```bash
-sudo apt install dfu-util
-```
-
-### Step 1 — Enter DFU (bootloader) mode
-
-1. **Unplug** the device from USB.
-2. **Hold the Mute button** and **plug the USB cable back in** while keeping the button held.
-3. Continue holding the Mute button for **~3–5 seconds** until the LED flashes red.
-4. Release the button — the device is now in DFU mode.
-
-### Step 2 — Verify the device is detected
-
-```bash
-sudo dfu-util -l
-```
-
-You should see a DFU device listed (Vendor ID `2886`). If nothing appears, repeat Step 1.
-
-### Step 3 — Flash the recovery firmware (erase flash)
-
-Use the `4mb_all_ff.bin` recovery image to wipe the flash.  
-This file is located at:
-
-```
-reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/recover/4mb_all_ff.bin
-```
-
-```bash
-sudo dfu-util -R -e -a 1 -D reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/recover/4mb_all_ff.bin
-```
-
-> This erases all firmware from the device. The LED will go dark or stay red — this is expected.
-
-### Step 4 — Flash the desired firmware
-
-Choose the appropriate firmware from the table below:
-
-| Mode | File path |
-|------|-----------|
-| USB (recommended) v2.0.7 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.7.bin` |
-| USB 6-channel v2.0.8 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_6chl_v2.0.8.bin` |
-| USB v2.0.6 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.6.bin` |
-| USB v2.0.5 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.5.bin` |
-| I2S Master v1.0.7 48kHz | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/i2s/respeaker_xvf3800_i2s_master_dfu_firmware_v1.0.7_48k_test5.bin` |
-| I2S Master v1.0.5 48kHz | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/i2s/respeaker_xvf3800_i2s_master_dfu_firmware_v1.0.5_48k.bin` |
-| I2S v1.0.4 | `reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/i2s/respeaker_xvf3800_i2s_dfu_firmware_v1.0.4.bin` |
-
-Example (USB v2.0.7):
-
-```bash
-sudo dfu-util -R -e -a 1 -D reSpeaker_XVF3800_USB_4MIC_ARRAY/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.7.bin
-```
-
-### Step 5 — Verify
-
-```bash
-sudo dfu-util -l
-```
-
-Confirm the device still appears in DFU mode.
-
-### Step 6 — Reconnect normally
-
-Unplug and re-plug the USB cable **without** holding the Mute button.  
-The device should boot with the new firmware and be detected as a normal USB audio device.
+| `ModuleNotFoundError: xvf_host` | File not inside `python_control/` — re-check Setup Step 2 |
+| `No backend available` (pyusb) | `libusb` not installed: `sudo apt install libusb-1.0-0` |
+| `Permission denied` on USB | Follow USB Permissions Setup section above |
+| `_tkinter` not found | `sudo apt install python3-tk` |
+| `ModuleNotFoundError: flask` | `pip install flask` |
+| Firmware folder empty in Flash tab | `xmos_firmwares/` must be one level above `python_control/` |
+| Web UI: `Address already in use` | Use `--port 8080` (or any free port) |
+| `DISPLAY not set` (Jetson SSH) | Use Web UI instead, or `ssh -X` for X11 forwarding |

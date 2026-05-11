@@ -225,7 +225,7 @@ def api_connect():
             usb_dev = find()
             if usb_dev is None:
                 return jsonify(ok=False, msg="Device not found — check USB connection and udev rules")
-            _dev = ReSpeaker(usb_dev)
+            _dev = usb_dev  # find() already returns a ReSpeaker object
         except Exception as e:
             return jsonify(ok=False, msg=str(e))
     _start_live()

@@ -2,14 +2,15 @@
 
 Tools for monitoring, controlling, and flashing firmware on the **reSpeaker XVF3800 USB 4-Mic Array**.
 
-This repo ships **two files**:
+This repo ships **three files**:
 
 | File | Description |
 |------|-------------|
-| `respeaker_ui.py` | Desktop GUI (Tkinter) — run locally on the machine with the mic |
+| `respeaker_ui.py`  | Desktop GUI (Tkinter) — run locally on the machine with the mic |
 | `respeaker_web.py` | Web UI (Flask) — SSH into the machine, open in any browser remotely |
+| `record_audio.py`  | Standalone CLI recorder — auto-rotates folders every minute |
 
-Both files must be placed inside the SDK's `python_control/` folder (see [Setup](#setup)).
+All three files must be placed inside the SDK's `python_control/` folder (see [Setup](#setup)).
 
 ---
 
@@ -26,7 +27,7 @@ Both files must be placed inside the SDK's `python_control/` folder (see [Setup]
 | **GPIO** | Read/write GPIO port pins |
 | **System** | Save / clear config, reboot |
 | **Flash** | Flash `.bin` firmware files from `xmos_firmwares/` via USB DFU |
-| **Record** | Capture audio from the device (`respeaker_ui.py` only) |
+| **Record** | Capture audio from the device — auto-detects 2 / 6 channels from active firmware, rotates folders every minute |
 
 ---
 
@@ -43,10 +44,16 @@ pip install pyusb sounddevice soundfile numpy libusb-package
 
 ```bash
 sudo apt install libusb-1.0-0 dfu-util
-pip install flask pyusb libusb-package
+pip install flask pyusb libusb-package sounddevice soundfile numpy
 ```
 
 > No display or X11 required for the web UI — works over plain SSH.
+
+### CLI recorder — `record_audio.py`
+
+```bash
+pip install sounddevice soundfile numpy
+```
 
 ---
 
@@ -126,6 +133,7 @@ reSpeaker_XVF3800_USB_4MIC_ARRAY/
 ```bash
 cp respeaker_ui.py  reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/
 cp respeaker_web.py reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/
+cp record_audio.py  reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control/
 ```
 
 After this step:
@@ -137,10 +145,11 @@ reSpeaker_XVF3800_USB_4MIC_ARRAY/
     ├── respeaker_get_doa.py ← SDK
     ├── respeaker_ui.py      ← copied from this repo  ✓
     ├── respeaker_web.py     ← copied from this repo  ✓
+    ├── record_audio.py      ← copied from this repo  ✓
     └── readme.md
 ```
 
-> Both files import `xvf_host.py` at runtime. They also look for `../xmos_firmwares/` for firmware flashing.
+> All files import `xvf_host.py` at runtime. They also look for `../xmos_firmwares/` for firmware flashing.
 
 ---
 
@@ -172,7 +181,36 @@ Then open a browser on **any machine** on the same network:
 http://<host-ip>:5000
 ```
 
-The web UI includes all parameter tabs, real-time DOA compass, firmware flash with progress log, and Save Config — everything except audio recording.
+The web UI includes all parameter tabs, real-time DOA compass, firmware flash with progress log, Save Config, and the **Record** tab (continuous recording with 1-minute folder rotation).
+
+---
+
+## Run — CLI Recorder (`record_audio.py`)
+
+Standalone command-line recorder. Auto-detects channel count (2 or 6) from the active firmware, splits audio into timestamped folders every minute.
+
+```bash
+cd reSpeaker_XVF3800_USB_4MIC_ARRAY/python_control
+python3 record_audio.py                       # default: 60 s segments, ~/respeaker_recordings/
+python3 record_audio.py --segment 30          # 30 s segments
+python3 record_audio.py --outdir /tmp/mic     # custom output folder
+python3 record_audio.py --device 5            # force PortAudio device index
+python3 record_audio.py --rate 48000          # force sample rate
+```
+
+Output structure:
+
+```
+~/respeaker_recordings/
+├── 2026-05-21_10-30-00/
+│   ├── ch0.wav
+│   ├── ch1.wav
+│   └── ...  (one WAV per channel, 2 or 6 files)
+├── 2026-05-21_10-31-00/
+│   └── ...
+```
+
+Press **Ctrl+C** to stop — the unfinished tail segment is also saved.
 
 ---
 

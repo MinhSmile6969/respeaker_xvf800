@@ -11,7 +11,16 @@ Usage:
 """
 
 import sys, os, time, math, threading, subprocess, re, glob, json, queue, argparse
+from datetime import datetime
 from flask import Flask, jsonify, request, Response, stream_with_context
+
+try:
+    import sounddevice as _sd
+    import soundfile as _sf
+    import numpy as _np
+    _AUDIO_OK = True
+except ImportError:
+    _AUDIO_OK = False
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -90,6 +99,20 @@ _sse_queues: list = []
 _sse_lock = threading.Lock()
 _live_stop = threading.Event()
 _live_stop.set()
+
+# ── Recording state ──────────────────────────────────────────────────────────
+_rec_active = False
+_rec_lock = threading.Lock()
+_rec_buffer: list = []
+_rec_stream = None
+_rec_stop_event = threading.Event()
+_rec_info = {
+    "device_idx": None, "device_name": "", "channels": 0,
+    "samplerate": 0, "segment_sec": 60,
+    "outdir": os.path.expanduser("~/respeaker_recordings"),
+    "start_time": None, "segments_saved": 0,
+    "last_folder": "",
+}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -207,6 +230,59 @@ def _stop_live():
 
 
 threading.Thread(target=_live_loop, daemon=True).start()
+
+# ── Recording helpers ─────────────────────────────────────────────────────────
+
+def _find_respeaker_audio():
+    """Return (idx, name, channels, sr) for first ReSpeaker input device, else None."""
+    if not _AUDIO_OK:
+        return None
+    try:
+        for i, d in enumerate(_sd.query_devices()):
+            if d["max_input_channels"] <= 0:
+                continue
+            n = d["name"].lower()
+            if "respeaker" in n or "xvf" in n or "seeed" in n:
+                return (i, d["name"], d["max_input_channels"],
+                        int(d.get("default_samplerate", 16000)))
+    except Exception:
+        pass
+    return None
+
+
+def _save_rec_segment(chunks, channels, sr, outdir):
+    """Save each channel of `chunks` (list of (frames, ch) arrays) as ch{i}.wav."""
+    if not chunks:
+        return None
+    data = _np.concatenate(chunks, axis=0)
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    folder = os.path.join(outdir, ts)
+    os.makedirs(folder, exist_ok=True)
+    for ch in range(channels):
+        path = os.path.join(folder, f"ch{ch}.wav")
+        _sf.write(path, data[:, ch].astype("float32"), sr, subtype="PCM_16")
+    return folder
+
+
+def _rec_rotate_loop():
+    """Every segment_sec, swap buffer and save in a background thread."""
+    global _rec_buffer
+    while not _rec_stop_event.is_set():
+        if _rec_stop_event.wait(_rec_info["segment_sec"]):
+            break
+        if not _rec_active:
+            break
+        with _rec_lock:
+            chunks, _rec_buffer = _rec_buffer, []
+        if chunks:
+            folder = _save_rec_segment(
+                chunks, _rec_info["channels"],
+                _rec_info["samplerate"], _rec_info["outdir"])
+            _rec_info["segments_saved"] += 1
+            _rec_info["last_folder"] = folder or ""
+            _broadcast({"type": "rec_segment", "folder": folder,
+                        "count": _rec_info["segments_saved"]})
+
 
 # ── API routes ────────────────────────────────────────────────────────────────
 
@@ -391,6 +467,150 @@ def api_firmware_flash():
     )
 
 
+# ── Audio recording routes ────────────────────────────────────────────────────
+
+@app.route("/api/audio/devices")
+def api_audio_devices():
+    if not _AUDIO_OK:
+        return jsonify(ok=False,
+            msg="sounddevice not installed — run: pip install sounddevice soundfile numpy")
+    devices = []
+    try:
+        for i, d in enumerate(_sd.query_devices()):
+            if d["max_input_channels"] > 0:
+                devices.append({
+                    "idx": i, "name": d["name"],
+                    "channels": d["max_input_channels"],
+                    "samplerate": int(d.get("default_samplerate", 16000)),
+                })
+    except Exception as e:
+        return jsonify(ok=False, msg=str(e))
+    found = _find_respeaker_audio()
+    detected = None
+    if found:
+        detected = {"idx": found[0], "name": found[1],
+                    "channels": found[2], "samplerate": found[3]}
+    return jsonify(ok=True, devices=devices, detected=detected)
+
+
+@app.route("/api/audio/start", methods=["POST"])
+def api_audio_start():
+    global _rec_active, _rec_stream, _rec_buffer
+    if not _AUDIO_OK:
+        return jsonify(ok=False, msg="sounddevice not installed")
+    if _rec_active:
+        return jsonify(ok=False, msg="Already recording")
+
+    body = request.get_json(force=True, silent=True) or {}
+
+    if body.get("device_idx") is None:
+        found = _find_respeaker_audio()
+        if not found:
+            return jsonify(ok=False, msg="No ReSpeaker input device found")
+        idx, name, channels, sr_default = found
+    else:
+        idx = int(body["device_idx"])
+        info = _sd.query_devices(idx)
+        name = info["name"]
+        channels = info["max_input_channels"]
+        sr_default = int(info.get("default_samplerate", 16000))
+
+    sr = int(body.get("samplerate") or sr_default)
+    segment_sec = max(5, int(body.get("segment") or 60))
+    outdir = body.get("outdir") or os.path.expanduser("~/respeaker_recordings")
+    outdir = os.path.expanduser(outdir)
+    try:
+        os.makedirs(outdir, exist_ok=True)
+    except Exception as e:
+        return jsonify(ok=False, msg=f"Cannot create outdir: {e}")
+
+    _rec_info.update({
+        "device_idx": idx, "device_name": name, "channels": channels,
+        "samplerate": sr, "segment_sec": segment_sec, "outdir": outdir,
+        "start_time": time.time(), "segments_saved": 0, "last_folder": "",
+    })
+
+    with _rec_lock:
+        _rec_buffer = []
+
+    def _cb(indata, _frames, _t, status):
+        if status:
+            pass  # overflows happen but don't break recording
+        with _rec_lock:
+            _rec_buffer.append(indata.copy())
+
+    try:
+        _rec_stream = _sd.InputStream(
+            device=idx, channels=channels, samplerate=float(sr),
+            dtype="float32", callback=_cb, blocksize=1024)
+        _rec_stream.start()
+    except Exception as e:
+        return jsonify(ok=False, msg=f"Cannot open stream: {e}")
+
+    _rec_active = True
+    _rec_stop_event.clear()
+    threading.Thread(target=_rec_rotate_loop, daemon=True).start()
+    _broadcast({"type": "rec_start", "info": dict(_rec_info)})
+    return jsonify(ok=True, info=dict(_rec_info))
+
+
+@app.route("/api/audio/stop", methods=["POST"])
+def api_audio_stop():
+    global _rec_active, _rec_stream, _rec_buffer
+    if not _rec_active:
+        return jsonify(ok=True, msg="Not recording", segments=0)
+
+    _rec_stop_event.set()
+    _rec_active = False
+
+    if _rec_stream:
+        try:
+            _rec_stream.stop()
+            _rec_stream.close()
+        except Exception:
+            pass
+        _rec_stream = None
+
+    with _rec_lock:
+        chunks, _rec_buffer = _rec_buffer, []
+    if chunks:
+        folder = _save_rec_segment(chunks, _rec_info["channels"],
+                                   _rec_info["samplerate"], _rec_info["outdir"])
+        _rec_info["segments_saved"] += 1
+        _rec_info["last_folder"] = folder or ""
+
+    _broadcast({"type": "rec_stop", "count": _rec_info["segments_saved"]})
+    return jsonify(ok=True, segments=_rec_info["segments_saved"])
+
+
+@app.route("/api/audio/status")
+def api_audio_status():
+    elapsed = 0.0
+    if _rec_active and _rec_info["start_time"]:
+        elapsed = time.time() - _rec_info["start_time"]
+    return jsonify(active=_rec_active, info=dict(_rec_info), elapsed=elapsed)
+
+
+@app.route("/api/recordings")
+def api_recordings():
+    outdir = _rec_info["outdir"]
+    if not os.path.isdir(outdir):
+        return jsonify(outdir=outdir, folders=[])
+    folders = []
+    for entry in sorted(os.listdir(outdir), reverse=True)[:50]:
+        full = os.path.join(outdir, entry)
+        if not os.path.isdir(full):
+            continue
+        try:
+            wavs = [f for f in os.listdir(full) if f.endswith(".wav")]
+            size = sum(os.path.getsize(os.path.join(full, f)) for f in wavs)
+        except Exception:
+            wavs, size = [], 0
+        folders.append({"name": entry, "path": full,
+                        "channels": len(wavs), "size": size})
+    return jsonify(outdir=outdir, folders=folders)
+
+
 # ── HTML page ─────────────────────────────────────────────────────────────────
 
 HTML_PAGE = r"""<!DOCTYPE html>
@@ -546,6 +766,7 @@ const GROUPS=[
   ["System",   ["SAVE_CONFIGURATION","CLEAR_CONFIGURATION","REBOOT","MAX_CONTROL_TIME","RESET_MAX_CONTROL_TIME",
                 "AUDIO_MGR_RESET_MIN_IDLE_TIME","I2S_RESET_MIN_IDLE_TIME","AEC_RESET_MIN_IDLE_TIME",
                 "PP_RESET_MIN_IDLE_TIME","AEC_FILTER_CMD_ABORT","PP_NL_MODEL_CMD_ABORT","PP_EQUALIZATION_CMD_ABORT"]],
+  ["Record",   []],
   ["Flash",    []],
 ];
 const CONFIRM={"SAVE_CONFIGURATION":"Save current configuration to flash?",
@@ -617,6 +838,7 @@ function buildUI(){
     pane.className='pane'+(i===0?' active':'');
     pane.id='pane-'+i;
     if(name==='Flash') pane.appendChild(buildFlashPane());
+    else if(name==='Record') pane.appendChild(buildRecordPane());
     else if(name==='Live') pane.appendChild(buildLivePane(plist));
     else pane.appendChild(buildParamPane(name,plist));
     cont.appendChild(pane);
@@ -747,6 +969,119 @@ function updateDoa(raw){
   if(a){a.textContent=ang+'°'; a.style.color=speech?'#e74c3c':'#2980b9'}
   const s=document.getElementById('doasp');
   if(s){s.textContent=speech?'SPEECH':'Silence'; s.style.color=speech?'#e74c3c':'#6b7785'}
+}
+
+// ── Record pane ───────────────────────────────────────────────────────────────
+let _recPollTimer=null;
+
+function buildRecordPane(){
+  const d=document.createElement('div');
+  d.innerHTML=`
+  <div class="fcard">
+    <h3>Audio Recording  <span style="font-size:11px;font-weight:400;color:#6b7785">(saves to server filesystem)</span></h3>
+    <div style="display:grid;grid-template-columns:140px 1fr;gap:7px 12px;align-items:center;font-size:12px;margin-bottom:12px">
+      <span style="color:#6b7785">Device:</span>
+      <span id="rec-dev" style="font-family:monospace">auto-detect…</span>
+      <span style="color:#6b7785">Channels:</span>
+      <span id="rec-ch" style="font-weight:700;color:#2980b9">—</span>
+      <span style="color:#6b7785">Sample rate:</span>
+      <span id="rec-sr">—</span>
+      <span style="color:#6b7785">Segment length:</span>
+      <span><input class="pe" id="rec-seg" type="number" value="60" min="5" max="3600" style="width:80px"> seconds (new folder every segment)</span>
+      <span style="color:#6b7785">Output folder:</span>
+      <input class="pe" id="rec-out" type="text" value="" placeholder="~/respeaker_recordings (default)" style="width:340px">
+    </div>
+    <div class="tbar">
+      <button class="xbtn ok" id="recstart" onclick="recStart()">Start Recording</button>
+      <button class="xbtn" id="recstop" onclick="recStop()" disabled>Stop</button>
+      <button class="xbtn" onclick="loadAudioDevices()">Re-scan device</button>
+      <span id="rec-status" style="font-size:12px;color:#6b7785;margin-left:14px;font-weight:600">Idle</span>
+    </div>
+  </div>
+  <div class="fcard">
+    <h3>Recordings  <span style="font-size:11px;font-weight:400;color:#6b7785">— folder <span id="rec-out-disp" style="font-family:monospace">—</span></span></h3>
+    <ul class="fwlist" id="reclist"><li style="color:#6b7785;font-size:12px">Loading…</li></ul>
+    <button class="xbtn" onclick="loadRecList()" style="margin-top:8px">Refresh</button>
+  </div>`;
+  loadAudioDevices();
+  loadRecList();
+  startRecStatusPoll();
+  return d;
+}
+
+async function loadAudioDevices(){
+  const r=await fetch('/api/audio/devices').then(r=>r.json()).catch(e=>({ok:false,msg:String(e)}));
+  const dn=document.getElementById('rec-dev'), ch=document.getElementById('rec-ch'), sr=document.getElementById('rec-sr');
+  if(!r.ok){ if(dn) dn.textContent='ERROR: '+r.msg; return; }
+  if(r.detected){
+    if(dn) dn.textContent=r.detected.name+'  [idx '+r.detected.idx+']';
+    if(ch) ch.textContent=r.detected.channels+' ch';
+    if(sr) sr.textContent=r.detected.samplerate+' Hz';
+  } else {
+    if(dn) dn.textContent='No ReSpeaker input found — plug in the mic';
+    if(ch) ch.textContent='—'; if(sr) sr.textContent='—';
+  }
+}
+
+async function recStart(){
+  const seg=parseInt(document.getElementById('rec-seg').value)||60;
+  const out=document.getElementById('rec-out').value.trim();
+  const body={segment:seg};
+  if(out) body.outdir=out;
+  const r=await fetch('/api/audio/start',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  if(!r.ok){alert('Start failed: '+r.msg); return}
+  document.getElementById('recstart').disabled=true;
+  document.getElementById('recstop').disabled=false;
+  setStatus('Recording started: '+(r.info?.device_name||''));
+}
+
+async function recStop(){
+  const r=await fetch('/api/audio/stop',{method:'POST'}).then(r=>r.json());
+  document.getElementById('recstart').disabled=false;
+  document.getElementById('recstop').disabled=true;
+  setStatus('Recording stopped — '+(r.segments||0)+' segment(s) saved');
+  loadRecList();
+}
+
+function startRecStatusPoll(){
+  if(_recPollTimer) clearInterval(_recPollTimer);
+  _recPollTimer=setInterval(async()=>{
+    const el=document.getElementById('rec-status');
+    if(!el){clearInterval(_recPollTimer); _recPollTimer=null; return}
+    const r=await fetch('/api/audio/status').then(r=>r.json()).catch(()=>null);
+    if(!r) return;
+    const outDisp=document.getElementById('rec-out-disp');
+    if(outDisp&&r.info&&r.info.outdir) outDisp.textContent=r.info.outdir;
+    if(r.active){
+      const e=r.elapsed||0, m=Math.floor(e/60), s=Math.floor(e%60);
+      el.textContent=`Recording  ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}  •  ${r.info.segments_saved} segment(s) saved`;
+      el.style.color='#e74c3c';
+      const sb=document.getElementById('recstart'), tb=document.getElementById('recstop');
+      if(sb) sb.disabled=true; if(tb) tb.disabled=false;
+    } else {
+      el.textContent='Idle';
+      el.style.color='#6b7785';
+    }
+  },1000);
+}
+
+async function loadRecList(){
+  const ul=document.getElementById('reclist'); if(!ul) return;
+  const r=await fetch('/api/recordings').then(r=>r.json()).catch(()=>null);
+  if(!r){ul.innerHTML='<li style="color:#e74c3c;font-size:12px">Failed to load.</li>'; return}
+  const od=document.getElementById('rec-out-disp'); if(od) od.textContent=r.outdir||'—';
+  if(!r.folders.length){ul.innerHTML='<li style="color:#6b7785;font-size:12px">No recordings yet.</li>'; return}
+  ul.innerHTML='';
+  r.folders.forEach(f=>{
+    const li=document.createElement('li'); li.className='fwitem';
+    const mb=(f.size/1024/1024).toFixed(2);
+    li.innerHTML=`<span class="fwkind">${f.channels}ch</span>
+      <span style="font-family:monospace;font-size:12px;font-weight:600">${esc(f.name)}</span>
+      <span class="fwn">${mb} MB</span>
+      <span class="fwn" style="margin-left:auto;opacity:0.7">${esc(f.path)}</span>`;
+    ul.appendChild(li);
+  });
 }
 
 // ── Flash pane ────────────────────────────────────────────────────────────────

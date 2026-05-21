@@ -10,7 +10,7 @@ Usage:
     Then open  http://<machine-ip>:5000  in any browser.
 """
 
-import sys, os, time, math, threading, subprocess, re, glob, json, queue, argparse
+import sys, os, time, math, threading, subprocess, re, glob, json, queue, argparse, socket
 from datetime import datetime
 from flask import Flask, jsonify, request, Response, stream_with_context
 
@@ -1263,11 +1263,38 @@ init();
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _find_free_port(host, start, max_tries=100):
+    """Scan upward from `start` and return the first port we can bind to."""
+    bind_host = "" if host in ("0.0.0.0", "") else host
+    for offset in range(max_tries):
+        port = start + offset
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((bind_host, port))
+                return port
+            except OSError:
+                continue
+    return None
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="reSpeaker XVF3800 Web Control Panel")
     p.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
-    p.add_argument("--port", type=int, default=5000, help="Port (default: 5000)")
+    p.add_argument("--port", type=int, default=5000, help="Preferred port (default: 5000)")
+    p.add_argument("--strict-port", action="store_true",
+                   help="Fail if --port is busy instead of auto-picking next free port")
     args = p.parse_args()
+
+    if args.strict_port:
+        chosen_port = args.port
+    else:
+        chosen_port = _find_free_port(args.host, args.port)
+        if chosen_port is None:
+            print(f"ERROR: no free port in [{args.port}..{args.port+99}]")
+            sys.exit(1)
+        if chosen_port != args.port:
+            print(f"  Note: port {args.port} busy → using {chosen_port}")
+
     print(f"\n  reSpeaker XVF3800 Web Control Panel")
-    print(f"  Open:  http://localhost:{args.port}   (or http://<this-machine-ip>:{args.port})\n")
-    app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
+    print(f"  Open:  http://localhost:{chosen_port}   (or http://<this-machine-ip>:{chosen_port})\n")
+    app.run(host=args.host, port=chosen_port, threaded=True, use_reloader=False)

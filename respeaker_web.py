@@ -1263,17 +1263,28 @@ init();
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def _find_free_port(host, start, max_tries=100):
-    """Scan upward from `start` and return the first port we can bind to."""
+def _find_free_port(host, preferred, low=1, high=9999):
+    """Try `preferred` port first, then scan [low..high] for any free port."""
     bind_host = "" if host in ("0.0.0.0", "") else host
-    for offset in range(max_tries):
-        port = start + offset
+
+    def _try(port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind((bind_host, port))
-                return port
+                return True
             except OSError:
-                continue
+                return False
+
+    if low <= preferred <= high and _try(preferred):
+        return preferred
+    # Scan upward from preferred+1 first (likely closer to user's intent)
+    for port in range(max(preferred + 1, low), high + 1):
+        if _try(port):
+            return port
+    # Then scan downward from preferred-1
+    for port in range(min(preferred - 1, high), low - 1, -1):
+        if _try(port):
+            return port
     return None
 
 
@@ -1282,18 +1293,18 @@ if __name__ == "__main__":
     p.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
     p.add_argument("--port", type=int, default=5000, help="Preferred port (default: 5000)")
     p.add_argument("--strict-port", action="store_true",
-                   help="Fail if --port is busy instead of auto-picking next free port")
+                   help="Fail if --port is busy instead of auto-picking a free port in 1..9999")
     args = p.parse_args()
 
     if args.strict_port:
         chosen_port = args.port
     else:
-        chosen_port = _find_free_port(args.host, args.port)
+        chosen_port = _find_free_port(args.host, args.port, low=1, high=9999)
         if chosen_port is None:
-            print(f"ERROR: no free port in [{args.port}..{args.port+99}]")
+            print(f"ERROR: no free TCP port found in [1..9999]")
             sys.exit(1)
         if chosen_port != args.port:
-            print(f"  Note: port {args.port} busy → using {chosen_port}")
+            print(f"  Note: port {args.port} busy → auto-picked {chosen_port}")
 
     print(f"\n  reSpeaker XVF3800 Web Control Panel")
     print(f"  Open:  http://localhost:{chosen_port}   (or http://<this-machine-ip>:{chosen_port})\n")

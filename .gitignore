@@ -7,7 +7,7 @@ venv/
 env/
 
 # Python cache / build artifacts
-__pycache__/
+*__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
